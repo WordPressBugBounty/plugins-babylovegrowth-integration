@@ -2,7 +2,7 @@
 /**
  * Plugin Name: BabyLoveGrowth Integration
  * Description: Secure REST endpoint to publish posts from BabyLoveGrowth.ai backend via API key.
- * Version: 1.0.14
+ * Version: 1.0.15
  * Author: BabyLoveGrowth.ai
  * License: GPLv2 or later
  * License URI: https://www.gnu.org/licenses/gpl-2.0.html

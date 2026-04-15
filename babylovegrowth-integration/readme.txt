@@ -4,7 +4,7 @@ Tags: rest api, headless, publishing, webhook
 Requires at least: 5.6
 Tested up to: 6.9
 Requires PHP: 7.4
-Stable tag: 1.0.14
+Stable tag: 1.0.15
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -43,6 +43,9 @@ Requests are authorized with the API key only. No user login is required.
 3. Backlinks.
 
 == Changelog ==
+
+= 1.0.15 =
+* Removed: Webhook URL from plugin settings.
 
 = 1.0.14 =
 * Added: Alt text for hero image.
@@ -121,6 +124,9 @@ Requests are authorized with the API key only. No user login is required.
 Initial release.
 
 == Upgrade Notice ==
+
+= 1.0.15 =
+Removed webhook URL from plugin settings.
 
 = 1.0.13 =
 New: Choose a default author in settings so all published posts use that author.

@@ -147,15 +147,6 @@ function babylovegrowth_integration_settings_page() {
 				</div>
 				<p class="blg-desc"><?php echo esc_html__('Copy this key and paste it into the "Integration Key" field in your BLG dashboard.', 'babylovegrowth-integration'); ?></p>
 			</div>
-
-			<div class="blg-field">
-				<label for="babylovegrowth_webhook_endpoint" class="blg-label"><?php echo esc_html__('Webhook URL', 'babylovegrowth-integration'); ?></label>
-				<div class="blg-input-group" style="max-width:28em">
-					<input type="text" id="babylovegrowth_webhook_endpoint" value="<?php echo esc_attr( rest_url('babylovegrowth/v1/publish') ); ?>" class="regular-text code" readonly />
-					<button type="button" class="button blg-copy" data-copy-target="#babylovegrowth_webhook_endpoint"><?php echo esc_html__('Copy', 'babylovegrowth-integration'); ?></button>
-				</div>
-				<p class="blg-desc"><?php echo esc_html__('Copy this URL and paste it into the "Webhook URL" field in your BLG dashboard.', 'babylovegrowth-integration'); ?></p>
-			</div>
 		</div>
 
 		<!-- Step 2: Configure in WordPress -->
