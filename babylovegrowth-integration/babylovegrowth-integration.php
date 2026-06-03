@@ -2,7 +2,7 @@
 /**
  * Plugin Name: BabyLoveGrowth Integration
  * Description: Secure REST endpoint to publish posts from BabyLoveGrowth.ai backend via API key.
- * Version: 1.0.15
+ * Version: 1.0.18
  * Author: BabyLoveGrowth.ai
  * License: GPLv2 or later
  * License URI: https://www.gnu.org/licenses/gpl-2.0.html
@@ -10,7 +10,7 @@
  * Domain Path: /languages
  * Requires PHP: 7.4
  * Requires at least: 5.6
- * Tested up to: 6.9
+ * Tested up to: 7.0
  */
 
 if (!defined('ABSPATH')) exit;

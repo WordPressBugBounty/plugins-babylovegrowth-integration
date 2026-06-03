@@ -147,6 +147,7 @@ function babylovegrowth_integration_settings_page() {
 				</div>
 				<p class="blg-desc"><?php echo esc_html__('Copy this key and paste it into the "Integration Key" field in your BLG dashboard.', 'babylovegrowth-integration'); ?></p>
 			</div>
+
 		</div>
 
 		<!-- Step 2: Configure in WordPress -->
@@ -226,7 +227,7 @@ function babylovegrowth_integration_settings_page() {
 			<div class="blg-card blg-video-card" style="margin-top:16px">
 				<p class="blg-card-title"><?php echo esc_html__('Integration Tutorial', 'babylovegrowth-integration'); ?></p>
 				<div class="blg-video">
-					<iframe src="https://www.youtube.com/embed/5qIdz1L6FO8" title="<?php echo esc_attr__('BabyLoveGrowth Integration Tutorial', 'babylovegrowth-integration'); ?>" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" allowfullscreen loading="lazy" referrerpolicy="strict-origin-when-cross-origin"></iframe>
+					<iframe src="https://www.youtube.com/embed/wJvd3bEg3JI" title="<?php echo esc_attr__('BabyLoveGrowth Integration Tutorial', 'babylovegrowth-integration'); ?>" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" allowfullscreen loading="lazy" referrerpolicy="strict-origin-when-cross-origin"></iframe>
 				</div>
 			</div>
 		</form>
