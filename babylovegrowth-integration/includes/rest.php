@@ -429,3 +429,39 @@ add_filter('wp_kses_allowed_html', function($tags, $context) {
 	}
 	return $tags;
 }, 10, 2);
+
+
+/**
+ * Force SEO plugins to rebuild their cached sitemap whenever a post is published.
+ *
+ * Posts created programmatically — via the WordPress REST API, this plugin's
+ * publish endpoint, or a scheduled publish — do not reliably invalidate Rank
+ * Math's sitemap cache, so the sitemap can stay frozen at an old set of URLs
+ * until a post is manually re-saved. Invalidating here makes new posts appear
+ * in the sitemap automatically.
+ */
+add_action('transition_post_status', 'babylovegrowth_invalidate_seo_sitemap_cache', 20, 3);
+
+function babylovegrowth_invalidate_seo_sitemap_cache($new_status, $old_status, $post) {
+	if ($new_status !== 'publish' || !($post instanceof WP_Post) || $post->post_type !== 'post') {
+		return;
+	}
+
+	$cache_cleared = false;
+
+	// Rank Math
+	if (class_exists('\RankMath\Sitemap\Cache') && method_exists('\RankMath\Sitemap\Cache', 'invalidate_storage')) {
+		\RankMath\Sitemap\Cache::invalidate_storage();
+		$cache_cleared = true;
+	}
+
+	// Yoast SEO
+	if (class_exists('WPSEO_Sitemaps_Cache') && method_exists('WPSEO_Sitemaps_Cache', 'clear')) {
+		WPSEO_Sitemaps_Cache::clear();
+		$cache_cleared = true;
+	}
+
+	if (!$cache_cleared) {
+		error_log('BabyLoveGrowth: no supported SEO sitemap cache found to invalidate for post ' . $post->ID);
+	}
+}
