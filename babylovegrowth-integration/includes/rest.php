@@ -129,6 +129,13 @@ add_filter('wp_kses_allowed_html', $allow_html, 10, 2);
 
 // KSES remains enabled; iframe allowlist takes care of embeds
 
+	// Import inline content images into the media library (self-host instead of hotlinking)
+	$content_with_local_images = babylovegrowth_sideload_content_images($content, $post_id);
+	if ($content_with_local_images !== $content) {
+		$content = $content_with_local_images;
+		wp_update_post(['ID' => $post_id, 'post_content' => $content]);
+	}
+
 	// Set language AFTER post creation but BEFORE other operations
 	if ($lang) {
 		babylovegrowth_set_post_language($post_id, $lang, $content);
@@ -196,9 +203,10 @@ add_filter('wp_kses_allowed_html', $allow_html, 10, 2);
 		}
 	}
 
-	// Save JSON-LD scripts as post meta
+	// Save JSON-LD as post meta. update_post_meta() strips one layer of backslashes,
+	// so wp_slash() it first — otherwise the escaped quotes (\") break and the JSON-LD won't parse.
 	if (!empty($jsonld_scripts)) {
-		update_post_meta($post_id, '_babylovegrowth_jsonld', $jsonld_scripts);
+		update_post_meta($post_id, '_babylovegrowth_jsonld', wp_slash($jsonld_scripts));
 	} else {
 		delete_post_meta($post_id, '_babylovegrowth_jsonld');
 	}
@@ -354,21 +362,115 @@ function babylovegrowth_remove_first_image($content) {
 }
 
 function babylovegrowth_sideload_featured_image($url, $post_id) {
-	// Load all required WordPress admin dependencies for media_sideload_image
+	return babylovegrowth_import_remote_image($url, $post_id);
+}
+
+/**
+ * Download a remote image into the media library and return its attachment ID.
+ * If we already imported this URL before, reuse that attachment instead of
+ * downloading it again, so re-publishing doesn't create duplicate media.
+ * Returns 0 on failure without breaking the publish.
+ */
+function babylovegrowth_import_remote_image($url, $post_id = 0) {
+	if (empty($url)) {
+		return 0;
+	}
+
+	// Reuse the attachment already imported for this URL (avoids duplicates when re-publishing).
+	$existing = get_posts([
+		'post_type'   => 'attachment',
+		'post_status' => 'inherit',
+		'numberposts' => 1,
+		'fields'      => 'ids',
+		'meta_key'    => '_babylovegrowth_source_url',
+		'meta_value'  => $url,
+	]);
+	if (!empty($existing)) {
+		return (int) $existing[0];
+	}
+
+	// Load all required WordPress admin dependencies for media_sideload_image.
 	if (!function_exists('media_sideload_image')) {
 		require_once ABSPATH . 'wp-admin/includes/file.php';
 		require_once ABSPATH . 'wp-admin/includes/media.php';
 		require_once ABSPATH . 'wp-admin/includes/image.php';
 	}
-	
+
 	$att_id = media_sideload_image($url, $post_id, null, 'id');
-	// Log errors but don't break the response
-	if (is_wp_error($att_id)) {
-		error_log('BabyLoveGrowth: Featured image upload failed - ' . $att_id->get_error_message());
+	// Log errors but don't break the response.
+	if (is_wp_error($att_id) || !$att_id) {
+		error_log('BabyLoveGrowth: image import failed - ' . (is_wp_error($att_id) ? $att_id->get_error_message() : 'unknown error') . ' (' . $url . ')');
 		return 0;
 	}
-	
-	return $att_id ?: 0;
+
+	update_post_meta($att_id, '_babylovegrowth_source_url', $url);
+	return (int) $att_id;
+}
+
+/**
+ * Copy the post's inline images into the media library and rewrite each <img src>
+ * to the local URL, so the article serves images from the user's own domain
+ * instead of hotlinking ours. If one image fails, we keep its original URL so
+ * the post is never broken.
+ */
+function babylovegrowth_sideload_content_images($content, $post_id = 0) {
+	if (empty($content) || strpos($content, '<img') === false) {
+		return $content;
+	}
+
+	preg_match_all('/<img[^>]+src=(["\'])(.*?)\1/i', $content, $matches);
+
+	$site_host = wp_parse_url(home_url(), PHP_URL_HOST);
+	$replacements = [];
+
+	// Download at most this many images per request. Each is a slow download, so a
+	// huge article could hit PHP's time limit; extra images just stay hotlinked.
+	$max_imports = (int) apply_filters('babylovegrowth_max_content_images', 12);
+	$imported = 0;
+
+	foreach ($matches[2] as $raw_src) {
+		$raw_src = trim($raw_src);
+		if ($raw_src === '' || isset($replacements[$raw_src])) {
+			continue;
+		}
+		// Decode HTML entities (e.g. &amp; in the URL) so the download gets a valid URL.
+		// We keep $raw_src as-is for the text replacement below.
+		$url = html_entity_decode($raw_src, ENT_QUOTES);
+
+		// Only import remote http(s) images hosted elsewhere.
+		if (!preg_match('#^https?://#i', $url)) {
+			continue;
+		}
+		$src_host = wp_parse_url($url, PHP_URL_HOST);
+		if ($src_host && $site_host && strcasecmp($src_host, $site_host) === 0) {
+			continue; // Already local.
+		}
+
+		if ($imported >= $max_imports) {
+			error_log('BabyLoveGrowth: content image import cap (' . $max_imports . ') reached for post ' . $post_id . '; remaining images left hotlinked.');
+			break;
+		}
+		$imported++;
+
+		$att_id = babylovegrowth_import_remote_image($url, $post_id);
+		if ($att_id) {
+			$local_url = wp_get_attachment_url($att_id);
+			if ($local_url) {
+				$replacements[$raw_src] = $local_url;
+			}
+		}
+	}
+
+	// Replace longest URLs first, so a short URL that is a prefix of a longer one
+	// (e.g. img.png vs img.png?v=2) can't corrupt the longer match.
+	uksort($replacements, function ($a, $b) {
+		return strlen($b) - strlen($a);
+	});
+	foreach ($replacements as $old => $new) {
+		$content = str_replace($old, $new, $content);
+	}
+
+	return $content;
 }
 
 function babylovegrowth_build_video_markup($url, $poster = '') {

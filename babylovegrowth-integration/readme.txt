@@ -4,7 +4,7 @@ Tags: rest api, headless, publishing, webhook
 Requires at least: 5.6
 Tested up to: 7.0
 Requires PHP: 7.4
-Stable tag: 1.0.19
+Stable tag: 1.0.20
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -43,6 +43,9 @@ Requests are authorized with the API key only. No user login is required.
 3. Backlinks.
 
 == Changelog ==
+
+= 1.0.20 =
+* Added: Inline content images (not just the featured image) are now imported into the WordPress media library and served from your own domain instead of being hotlinked from external storage. Images are deduplicated across re-publishes, and any image that cannot be imported keeps its original URL so posts never show a broken image.
 
 = 1.0.19 =
 * Fixed: Posts published through the integration now automatically refresh the Rank Math and Yoast sitemap cache, so new posts appear in the sitemap without needing a manual re-save.
