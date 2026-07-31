@@ -31,6 +31,10 @@ function babylovegrowth_get_api_key(WP_REST_Request $request) {
 }
 
 function babylovegrowth_handle_publish(WP_REST_Request $request) {
+	// Image downloads can outlive the caller's HTTP timeout - finish the post anyway.
+	ignore_user_abort(true);
+	@set_time_limit(300);
+
 	$incoming = babylovegrowth_get_api_key($request);
 	if (empty($incoming)) {
 		return new WP_REST_Response(['success' => false, 'error' => 'missing_api_key'], 401);
@@ -129,6 +133,14 @@ add_filter('wp_kses_allowed_html', $allow_html, 10, 2);
 
 // KSES remains enabled; iframe allowlist takes care of embeds
 
+	// Featured image before the content images: it is the most visible part of the post,
+	// and a time limit hit during the content imports used to leave it unset.
+	if ($hero) {
+		// Finishes the job in the background if this request is killed mid-import.
+		wp_schedule_single_event(time() + 120, 'babylovegrowth_retry_featured_image', [$post_id, $hero, $hero_alt]);
+		babylovegrowth_set_featured_image($post_id, $hero, $hero_alt);
+	}
+
 	// Import inline content images into the media library (self-host instead of hotlinking)
 	$content_with_local_images = babylovegrowth_sideload_content_images($content, $post_id);
 	if ($content_with_local_images !== $content) {
@@ -190,16 +202,6 @@ add_filter('wp_kses_allowed_html', $allow_html, 10, 2);
 			// Remove all existing tags first, then set the new ones
 			wp_delete_object_term_relationships($post_id, 'post_tag');
 			wp_set_post_tags($post_id, $valid_tag_ids);
-		}
-	}
-
-	if ($hero) {
-		$attachment_id = babylovegrowth_sideload_featured_image($hero, $post_id);
-		if (!is_wp_error($attachment_id) && $attachment_id) {
-			set_post_thumbnail($post_id, $attachment_id);
-			if ($hero_alt !== '') {
-				update_post_meta($attachment_id, '_wp_attachment_image_alt', $hero_alt);
-			}
 		}
 	}
 
@@ -361,8 +363,36 @@ function babylovegrowth_remove_first_image($content) {
 	return preg_replace('/<img[^>]*>/', '', $content, 1);
 }
 
-function babylovegrowth_sideload_featured_image($url, $post_id) {
-	return babylovegrowth_import_remote_image($url, $post_id);
+/** Import the hero image and make it the post's featured image. False if the import failed. */
+function babylovegrowth_set_featured_image($post_id, $url, $alt = '') {
+	if (!$post_id || empty($url)) {
+		return false;
+	}
+
+	$attachment_id = babylovegrowth_import_remote_image($url, $post_id);
+	if (!$attachment_id) {
+		return false;
+	}
+
+	set_post_thumbnail($post_id, $attachment_id);
+	if ($alt !== '') {
+		update_post_meta($attachment_id, '_wp_attachment_image_alt', $alt);
+	}
+
+	return true;
+}
+
+add_action('babylovegrowth_retry_featured_image', 'babylovegrowth_ensure_featured_image', 10, 3);
+
+/** Background retry for a publish that was cut short before the featured image was set. */
+function babylovegrowth_ensure_featured_image($post_id, $url, $alt = '') {
+	if (!get_post($post_id) || has_post_thumbnail($post_id)) {
+		return;
+	}
+
+	if (!babylovegrowth_set_featured_image($post_id, $url, $alt)) {
+		error_log('BabyLoveGrowth: featured image retry failed for post ' . $post_id . ' (' . $url . ')');
+	}
 }
 
 /**
