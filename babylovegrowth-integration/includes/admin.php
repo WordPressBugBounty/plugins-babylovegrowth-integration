@@ -32,17 +32,9 @@ add_action('admin_head', function () {
 });
 
 add_action('admin_init', function () {
-	register_setting('babylovegrowth_integration', 'babylovegrowth_api_key', [
-		'sanitize_callback' => function ($val) {
-			$val = sanitize_text_field($val);
-			// Preserve existing key if an empty value (or no value) is submitted
-			if ($val === '' || $val === null) {
-				$existing = get_option('babylovegrowth_api_key', '');
-				return $existing;
-			}
-			return $val;
-		}
-	]);
+	// The Integration Key is deliberately not registered as a setting. It is not
+	// user-editable text any more: it is issued by "Generate New Key" and stored
+	// as a fingerprint, so there is nothing for the settings form to save.
 	register_setting('babylovegrowth_integration', 'babylovegrowth_category', [
 		'sanitize_callback' => function ($val) { return absint($val); }
 	]);
@@ -70,10 +62,63 @@ add_action('admin_init', function () {
 	]);
 });
 
+/**
+ * Replace the Integration Key with a freshly generated one.
+ *
+ * The old key stops working the moment this runs, which is the point: it is the
+ * recovery path for a key that has leaked. Publishing stays broken until the new
+ * key is pasted into the BabyLoveGrowth dashboard, so the redirect flags the
+ * settings page to say so.
+ */
+add_action('admin_post_babylovegrowth_rotate_key', function () {
+	if (!current_user_can('manage_options')) {
+		wp_die(
+			esc_html__('You are not allowed to change the Integration Key.', 'babylovegrowth-integration'),
+			'',
+			['response' => 403]
+		);
+	}
+	check_admin_referer('babylovegrowth_rotate_key');
+
+	babylovegrowth_store_new_api_key(babylovegrowth_generate_api_key());
+	babylovegrowth_log_event('key_rotated');
+
+	wp_safe_redirect(add_query_arg(
+		['page' => 'babylovegrowth-integration', 'blg_key_rotated' => '1'],
+		admin_url('admin.php')
+	));
+	exit;
+});
+
+/**
+ * Hide the readable key early, once the owner confirms they have copied it.
+ */
+add_action('admin_post_babylovegrowth_hide_key', function () {
+	if (!current_user_can('manage_options')) {
+		wp_die(
+			esc_html__('You are not allowed to change the Integration Key.', 'babylovegrowth-integration'),
+			'',
+			['response' => 403]
+		);
+	}
+	check_admin_referer('babylovegrowth_hide_key');
+
+	babylovegrowth_hide_plain_key();
+
+	wp_safe_redirect(add_query_arg(
+		['page' => 'babylovegrowth-integration'],
+		admin_url('admin.php')
+	));
+	exit;
+});
+
 function babylovegrowth_integration_settings_page() {
 	if (!current_user_can('manage_options')) return;
 
-	$key = get_option('babylovegrowth_api_key', '');
+	// phpcs:ignore WordPress.Security.NonceVerification.Recommended -- Display-only flag set by our own post-rotation redirect.
+	$just_rotated = isset($_GET['blg_key_rotated']);
+
+	list($key, $key_state) = babylovegrowth_key_display();
 	$selected_category = get_option('babylovegrowth_category', '');
 	$selected_author = get_option('babylovegrowth_author', '');
 	$selected_tags = get_option('babylovegrowth_tags', []);
@@ -97,10 +142,30 @@ function babylovegrowth_integration_settings_page() {
 				--blg-border:#E5E5E5; /* neutral.light */
 				--blg-shadow:0 1px 2px rgba(0,0,0,.04);
 			}
-			.blg-wrap .blg-hero{background:var(--blg-primary);border:0;border-radius:12px;color:#fff;padding:32px 24px;margin:18px 0 24px;display:flex;align-items:center;justify-content:center;text-align:center}
-			.blg-wrap .blg-hero h1{margin:0;font-size:36px;line-height:1.2;color:#fff}
-			.blg-wrap .blg-hero p{margin:8px 0 0;opacity:.95;font-size:14px;color:#fff}
-			.blg-card{background:var(--blg-surface);border:1px solid var(--blg-border);border-radius:12px;box-shadow:var(--blg-shadow);padding:24px;max-width:860px;margin:0 auto}
+			.blg-wrap .blg-hero{background:var(--blg-primary);border:0;border-radius:12px;color:#fff;padding:18px 24px;margin:18px 0 14px;display:flex;align-items:center;justify-content:center;text-align:center}
+			.blg-wrap .blg-hero h1{margin:0;font-size:24px;line-height:1.2;color:#fff}
+			.blg-wrap .blg-hero p{margin:4px 0 0;opacity:.95;font-size:13px;color:#fff}
+			.blg-card{background:var(--blg-surface);border:1px solid var(--blg-border);border-radius:12px;box-shadow:var(--blg-shadow);padding:24px}
+			/* Two columns: setup on the left, monitoring on the right.
+			   Collapses to the original single column on narrower screens. */
+			.blg-cols{display:flex;gap:20px;align-items:flex-start}
+			.blg-cols>.blg-col-main{flex:1.5 1 0;min-width:0;display:flex;flex-direction:column;gap:20px}
+			.blg-cols>.blg-col-side{flex:1 1 0;min-width:0;display:flex;flex-direction:column;gap:20px}
+			.blg-cols form{margin:0}
+			@media (max-width:1100px){
+				.blg-cols{display:block}
+				.blg-cols>.blg-col-side{margin-top:20px}
+				.blg-cols>.blg-col-main>*+*,.blg-cols>.blg-col-side>*+*{margin-top:20px}
+			}
+			/* Connection status */
+			.blg-status{display:flex;align-items:flex-start;gap:10px;border:1px solid;border-radius:10px;padding:12px 16px;margin:0 0 14px;font-size:13px;line-height:1.6}
+			.blg-status .blg-status-dot{width:9px;height:9px;border-radius:50%;flex:none;margin-top:6px}
+			.blg-status-ok{color:#0f6b4f;background:#e8f5ef;border-color:#b9e0cf}
+			.blg-status-ok .blg-status-dot{background:#0f6b4f}
+			.blg-status-bad{color:#a8231a;background:#fdeceb;border-color:#f3c6c2}
+			.blg-status-bad .blg-status-dot{background:#a8231a}
+			.blg-status-wait{color:#45505E;background:#f2f4f6;border-color:#dde2e7}
+			.blg-status-wait .blg-status-dot{background:#45505E}
 			.blg-field{margin:0 0 18px}
 			.blg-label{font-weight:600;margin-bottom:6px;display:block}
 			.blg-input{width:100%;max-width:none;padding:10px 12px;border:1px solid #d1d5db;border-radius:8px}
@@ -124,28 +189,97 @@ function babylovegrowth_integration_settings_page() {
 			.blg-section-header{margin:32px 0 20px;padding-bottom:12px;border-bottom:2px solid var(--blg-border);font-size:20px;font-weight:700;color:var(--blg-text)}
 			.blg-section-header:first-of-type{margin-top:0}
 			.blg-section-note{background:var(--blg-surface-alt);border-left:4px solid var(--blg-primary);padding:12px 16px;border-radius:6px;margin-bottom:20px;font-size:13px;color:var(--blg-muted);line-height:1.6}
-			.blg-card-readonly{background:var(--blg-surface-alt);border:1px solid var(--blg-border);border-radius:12px;box-shadow:var(--blg-shadow);padding:24px;max-width:860px;margin:0 auto 24px}
+			.blg-card-readonly{background:var(--blg-surface-alt);border:1px solid var(--blg-border);border-radius:12px;box-shadow:var(--blg-shadow);padding:24px}
+			.blg-warn{margin-top:6px;font-size:12px;line-height:1.6;color:#7a3a00;background:#fff6e5;border-left:4px solid var(--blg-primary);padding:10px 12px;border-radius:6px}
+			/* Tag checkboxes */
+			.blg-checks{display:flex;flex-wrap:wrap;gap:8px 20px;margin-top:4px}
+			.blg-checks label{display:flex;align-items:center;gap:6px;font-size:13px}
+			/* Activity log — compact two-line entries so it fits the side column.
+			   Scrolls internally so a busy log never stretches the page. */
+			.blg-log{display:flex;flex-direction:column;max-height:420px;overflow-y:auto;overscroll-behavior:contain;padding-right:6px}
+			.blg-log-item{padding:9px 0 9px 10px;border-bottom:1px solid var(--blg-border);border-left:2px solid transparent}
+			.blg-log-item:last-child{border-bottom:0}
+			.blg-log-item.blg-log-bad{border-left-color:#a8231a;background:#fff5f5}
+			.blg-log-top{display:flex;justify-content:space-between;gap:10px;font-size:13px}
+			.blg-log-what{font-weight:600;color:var(--blg-text)}
+			.blg-log-item.blg-log-bad .blg-log-what{color:#a8231a}
+			.blg-log-when{color:var(--blg-muted);white-space:nowrap;font-variant-numeric:tabular-nums}
+			.blg-log-sub{font-size:12px;margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+			.blg-log-hint{color:var(--blg-muted)}
+			.blg-log-empty{color:var(--blg-muted);font-size:13px;margin:0}
 		</style>
 
 		<div class="blg-hero">
 			<div>
 				<h1><?php echo esc_html__('BabyLoveGrowth Integration', 'babylovegrowth-integration'); ?></h1>
-				<p><?php echo esc_html__('Configure BabyLoveGrowth plugin to publish articles to your website', 'babylovegrowth-integration'); ?></p>
+				<p><?php echo esc_html__('Publish articles from BabyLoveGrowth to your website', 'babylovegrowth-integration'); ?></p>
 			</div>
 		</div>
 
-		<!-- Step 1: Copy to BLG Dashboard -->
+		<?php $status = babylovegrowth_connection_status(); ?>
+		<div class="blg-status blg-status-<?php echo esc_attr($status['state']); ?>">
+			<span class="blg-status-dot"></span>
+			<span><strong><?php echo esc_html($status['title']); ?></strong> <?php echo esc_html($status['detail']); ?></span>
+		</div>
+
+		<?php if ($just_rotated) : ?>
+			<div class="notice notice-success">
+				<p><?php echo esc_html__('A new Integration Key has been generated. The previous key stopped working immediately — copy the new key below into your BabyLoveGrowth dashboard to resume publishing.', 'babylovegrowth-integration'); ?></p>
+			</div>
+		<?php endif; ?>
+
+		<div class="blg-cols">
+		<div class="blg-col-main">
+
+		<!-- Step 1: Copy to BabyLoveGrowth Dashboard -->
 		<div class="blg-card-readonly">
-			<h2 class="blg-section-header"><?php echo esc_html__('Step 1: Copy These to Your BLG Dashboard', 'babylovegrowth-integration'); ?></h2>
-			<p class="blg-section-note"><?php echo esc_html__('Copy the information below and paste it into your BabyLoveGrowth dashboard integration settings.', 'babylovegrowth-integration'); ?></p>
-			
+			<h2 class="blg-section-header"><?php echo esc_html__('Step 1: Copy This to Your BabyLoveGrowth Dashboard', 'babylovegrowth-integration'); ?></h2>
+			<p class="blg-section-note">
+				<?php
+				// phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- Format string is escaped; the only interpolation is a link built here.
+				printf(
+					/* translators: %s: link reading "BabyLoveGrowth dashboard". */
+					esc_html__('Copy the key below and paste it into your %s integration settings.', 'babylovegrowth-integration'),
+					'<a href="' . esc_url('https://www.babylovegrowth.ai/dashboard') . '" target="_blank" rel="noopener noreferrer">' . esc_html__('BabyLoveGrowth dashboard', 'babylovegrowth-integration') . '</a>'
+				);
+				?>
+			</p>
+
 			<div class="blg-field">
 				<label for="babylovegrowth_api_key" class="blg-label"><?php echo esc_html__('Integration Key', 'babylovegrowth-integration'); ?></label>
 				<div class="blg-input-group">
-					<input type="text" id="babylovegrowth_api_key" name="babylovegrowth_api_key" value="<?php echo esc_attr($key); ?>" class="blg-input" readonly />
-					<button type="button" class="button blg-copy" data-copy-target="#babylovegrowth_api_key"><?php echo esc_html__('Copy', 'babylovegrowth-integration'); ?></button>
+					<input type="text" id="babylovegrowth_api_key" value="<?php echo esc_attr($key); ?>" class="blg-input" readonly />
+					<?php if ($key_state !== 'hidden' && $key_state !== 'missing') : ?>
+						<button type="button" class="button blg-copy" data-copy-target="#babylovegrowth_api_key"><?php echo esc_html__('Copy', 'babylovegrowth-integration'); ?></button>
+					<?php endif; ?>
 				</div>
-				<p class="blg-desc"><?php echo esc_html__('Copy this key and paste it into the "Integration Key" field in your BLG dashboard.', 'babylovegrowth-integration'); ?></p>
+
+				<?php if ($key_state === 'pickup') : ?>
+					<p class="blg-warn">
+						<strong><?php echo esc_html__('Copy this key now.', 'babylovegrowth-integration'); ?></strong>
+						<?php echo esc_html__('For your security it is hidden once your first article arrives, and it cannot be shown again. If you lose it, generate a new one.', 'babylovegrowth-integration'); ?>
+					</p>
+					<form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" style="margin-top:8px">
+						<input type="hidden" name="action" value="babylovegrowth_hide_key" />
+						<?php wp_nonce_field('babylovegrowth_hide_key'); ?>
+						<button type="submit" class="button button-small"><?php echo esc_html__('I have saved it — hide it now', 'babylovegrowth-integration'); ?></button>
+					</form>
+				<?php elseif ($key_state === 'hidden') : ?>
+					<p class="blg-desc"><?php echo esc_html__('Your key is stored securely and cannot be displayed again. If you no longer have it, or you think someone else does, generate a new one below.', 'babylovegrowth-integration'); ?></p>
+				<?php elseif ($key_state === 'legacy') : ?>
+					<p class="blg-warn"><?php echo esc_html__('This key was created by an older version of the plugin and is still stored in readable form. Generating a new key upgrades this site to secure storage, so a copy of your database no longer reveals a working key.', 'babylovegrowth-integration'); ?></p>
+				<?php else : ?>
+					<p class="blg-desc"><?php echo esc_html__('No key yet. Generate one below to connect this site.', 'babylovegrowth-integration'); ?></p>
+				<?php endif; ?>
+			</div>
+
+			<div class="blg-field">
+				<form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" onsubmit="return confirm(<?php echo esc_attr(wp_json_encode(__('Generate a new Integration Key? The current key stops working right away, and publishing stays paused until you paste the new key into your BabyLoveGrowth dashboard.', 'babylovegrowth-integration'))); ?>);">
+					<input type="hidden" name="action" value="babylovegrowth_rotate_key" />
+					<?php wp_nonce_field('babylovegrowth_rotate_key'); ?>
+					<button type="submit" class="button"><?php echo esc_html__('Generate New Key', 'babylovegrowth-integration'); ?></button>
+					<p class="blg-desc"><?php echo esc_html__('Use this if your key may have been exposed — for example after a security incident, a database leak, or when someone who had access leaves. The old key is revoked instantly, so remember to paste the new key into your BabyLoveGrowth dashboard afterwards.', 'babylovegrowth-integration'); ?></p>
+				</form>
 			</div>
 
 		</div>
@@ -153,8 +287,6 @@ function babylovegrowth_integration_settings_page() {
 		<!-- Step 2: Configure in WordPress -->
 		<form method="post" action="options.php">
 			<?php settings_fields('babylovegrowth_integration'); ?>
-			<!-- Preserve Integration Key on save -->
-			<input type="hidden" name="babylovegrowth_api_key" value="<?php echo esc_attr($key); ?>" />
 			<div class="blg-card">
 				<h2 class="blg-section-header"><?php echo esc_html__('Step 2: Configure Your WordPress Settings', 'babylovegrowth-integration'); ?></h2>
 				<p class="blg-section-note"><?php echo esc_html__('These settings control how articles are published on your WordPress site. Make your selections below and click Save.', 'babylovegrowth-integration'); ?></p>
@@ -178,7 +310,7 @@ function babylovegrowth_integration_settings_page() {
 							</option>
 						<?php endforeach; ?>
 					</select>
-					<p class="blg-desc"><?php echo esc_html__('All articles from BLG will be assigned to this category.', 'babylovegrowth-integration'); ?></p>
+					<p class="blg-desc"><?php echo esc_html__('All articles from BabyLoveGrowth will be assigned to this category.', 'babylovegrowth-integration'); ?></p>
 				</div>
 
 				<div class="blg-field">
@@ -191,32 +323,32 @@ function babylovegrowth_integration_settings_page() {
 							</option>
 						<?php endforeach; ?>
 					</select>
-					<p class="blg-desc"><?php echo esc_html__('All articles from BLG will be assigned to this author.', 'babylovegrowth-integration'); ?></p>
+					<p class="blg-desc"><?php echo esc_html__('If you do not choose one, articles are assigned to your site\'s first administrator.', 'babylovegrowth-integration'); ?></p>
 				</div>
 
 				<div class="blg-field">
-					<label for="babylovegrowth_tags" class="blg-label"><?php echo esc_html__('Default Tags', 'babylovegrowth-integration'); ?></label>
-					<select id="babylovegrowth_tags" name="babylovegrowth_tags[]" multiple size="10" style="width: 25em; height: 150px;">
-						<?php if (empty($tags)) : ?>
-							<option value="" disabled><?php echo esc_html__('No tags available', 'babylovegrowth-integration'); ?></option>
-						<?php else : ?>
+					<span class="blg-label"><?php echo esc_html__('Default Tags', 'babylovegrowth-integration'); ?></span>
+					<?php if (empty($tags)) : ?>
+						<p class="blg-desc" style="margin-top:0"><?php echo esc_html__('No tags on this site yet.', 'babylovegrowth-integration'); ?></p>
+					<?php else : ?>
+						<div class="blg-checks">
 							<?php foreach ($tags as $tag) : ?>
-								<option value="<?php echo esc_attr($tag->term_id); ?>" <?php selected(in_array($tag->term_id, $selected_tags)); ?>>
+								<label>
+									<input type="checkbox" name="babylovegrowth_tags[]" value="<?php echo esc_attr($tag->term_id); ?>" <?php checked(in_array($tag->term_id, (array) $selected_tags)); ?> />
 									<?php echo esc_html($tag->name); ?>
-								</option>
+								</label>
 							<?php endforeach; ?>
-						<?php endif; ?>
-					</select>
-					<p class="blg-desc"><?php echo esc_html__('Hold Ctrl (or Cmd on Mac) to select multiple tags. All articles will be assigned these tags.', 'babylovegrowth-integration'); ?></p>
+						</div>
+						<p class="blg-desc"><?php echo esc_html__('Every article from BabyLoveGrowth gets these tags.', 'babylovegrowth-integration'); ?></p>
+					<?php endif; ?>
 				</div>
 
 				<div class="blg-field">
-					<label for="babylovegrowth_feature_image_enabled" class="blg-label"><?php echo esc_html__('Remove double title and image', 'babylovegrowth-integration'); ?></label>
 					<label>
 						<input type="checkbox" id="babylovegrowth_feature_image_enabled" name="babylovegrowth_feature_image_enabled" value="1" <?php checked($feature_image_enabled, true); ?> />
-						<?php echo esc_html__('Automatically remove double content (first title and image)', 'babylovegrowth-integration'); ?>
+						<?php echo esc_html__('Do not repeat the title and image inside the article', 'babylovegrowth-integration'); ?>
 					</label>
-					<p class="blg-desc"><?php echo esc_html__('This will automatically remove the first main heading and first image from the article text to prevent showing the same content twice.', 'babylovegrowth-integration'); ?></p>
+					<p class="blg-desc"><?php echo esc_html__('Your article already shows its title and featured image at the top, so we remove the duplicate pair from the text.', 'babylovegrowth-integration'); ?></p>
 				</div>
 
 				<div class="blg-actions">
@@ -224,13 +356,89 @@ function babylovegrowth_integration_settings_page() {
 				</div>
 			</div>
 
-			<div class="blg-card blg-video-card" style="margin-top:16px">
-				<p class="blg-card-title"><?php echo esc_html__('Integration Tutorial', 'babylovegrowth-integration'); ?></p>
-				<div class="blg-video">
-					<iframe src="https://www.youtube.com/embed/wJvd3bEg3JI" title="<?php echo esc_attr__('BabyLoveGrowth Integration Tutorial', 'babylovegrowth-integration'); ?>" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" allowfullscreen loading="lazy" referrerpolicy="strict-origin-when-cross-origin"></iframe>
-				</div>
-			</div>
 		</form>
+
+		</div><!-- /.blg-col-main -->
+
+		<div class="blg-col-side">
+
+		<!-- Activity log -->
+		<div class="blg-card">
+			<h2 class="blg-section-header"><?php echo esc_html__('Recent Activity', 'babylovegrowth-integration'); ?></h2>
+			<p class="blg-section-note"><?php echo esc_html__('Every request this plugin receives is listed here, accepted or rejected. This is the record of whether a post came from BabyLoveGrowth.', 'babylovegrowth-integration'); ?></p>
+
+			<?php $log_entries = babylovegrowth_get_log(); ?>
+			<?php if (empty($log_entries)) : ?>
+				<p class="blg-log-empty"><?php echo esc_html__('Nothing recorded yet.', 'babylovegrowth-integration'); ?></p>
+			<?php else : ?>
+				<p class="blg-desc" style="margin:0 0 8px">
+					<?php
+					// phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- Format string and both numeric arguments are escaped individually.
+					printf(
+						/* translators: 1: number of entries shown, 2: maximum number kept. */
+						esc_html__('Showing %1$s of the last %2$s requests. Older entries are discarded automatically.', 'babylovegrowth-integration'),
+						esc_html(number_format_i18n(count($log_entries))),
+						esc_html(number_format_i18n(BABYLOVEGROWTH_LOG_MAX))
+					);
+					?>
+				</p>
+				<div class="blg-log">
+					<?php foreach ($log_entries as $entry) : ?>
+						<?php
+						$is_bad = babylovegrowth_log_result_is_rejection($entry['result']);
+						$hint = babylovegrowth_log_result_hint($entry['result']);
+						$ts = babylovegrowth_log_entry_timestamp($entry);
+						// The post may have been deleted since; fall back to plain text.
+						$edit_link = !empty($entry['post_id']) ? get_edit_post_link($entry['post_id']) : '';
+						$label = $entry['slug'] ?: ($entry['post_id'] ? '#' . $entry['post_id'] : '');
+						// The exact time stays available on hover; the relative time is what reads.
+						$exact = $entry['time'] . ' UTC';
+						?>
+						<div class="blg-log-item <?php echo $is_bad ? 'blg-log-bad' : ''; ?>" title="<?php echo esc_attr($exact); ?>">
+							<div class="blg-log-top">
+								<span class="blg-log-what">
+									<?php
+									$result_label = babylovegrowth_log_result_label($entry['result']);
+									if (!empty($entry['count']) && (int) $entry['count'] > 1) {
+										/* translators: 1: what happened, 2: how many times in a row. */
+										$result_label = sprintf(
+											__('%1$s × %2$s', 'babylovegrowth-integration'),
+											$result_label,
+											number_format_i18n((int) $entry['count'])
+										);
+									}
+									echo esc_html($result_label);
+									?>
+								</span>
+								<span class="blg-log-when"><?php echo esc_html($ts ? babylovegrowth_relative_time($ts) : $entry['time']); ?></span>
+							</div>
+							<?php if ($label) : ?>
+								<div class="blg-log-sub">
+									<?php if ($edit_link) : ?>
+										<a href="<?php echo esc_url($edit_link); ?>"><?php echo esc_html($label); ?></a>
+									<?php else : ?>
+										<?php echo esc_html($label); ?>
+									<?php endif; ?>
+								</div>
+							<?php elseif ($hint) : ?>
+								<div class="blg-log-sub blg-log-hint"><?php echo esc_html($hint); ?></div>
+							<?php endif; ?>
+						</div>
+					<?php endforeach; ?>
+				</div>
+				<p class="blg-desc"><?php echo esc_html__('Hover any entry for the exact time.', 'babylovegrowth-integration'); ?></p>
+			<?php endif; ?>
+		</div>
+
+		<div class="blg-card blg-video-card">
+			<p class="blg-card-title"><?php echo esc_html__('Integration Tutorial', 'babylovegrowth-integration'); ?></p>
+			<div class="blg-video">
+				<iframe src="https://www.youtube.com/embed/wJvd3bEg3JI" title="<?php echo esc_attr__('BabyLoveGrowth Integration Tutorial', 'babylovegrowth-integration'); ?>" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" allowfullscreen loading="lazy" referrerpolicy="strict-origin-when-cross-origin"></iframe>
+			</div>
+		</div>
+
+		</div><!-- /.blg-col-side -->
+		</div><!-- /.blg-cols -->
 
 		
 		<script>

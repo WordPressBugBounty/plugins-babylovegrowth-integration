@@ -2,7 +2,7 @@
 /**
  * Plugin Name: BabyLoveGrowth Integration
  * Description: Secure REST endpoint to publish posts from BabyLoveGrowth.ai backend via API key.
- * Version: 1.0.21
+ * Version: 1.0.22
  * Author: BabyLoveGrowth.ai
  * License: GPLv2 or later
  * License URI: https://www.gnu.org/licenses/gpl-2.0.html
@@ -15,6 +15,8 @@
 
 if (!defined('ABSPATH')) exit;
 
+require_once __DIR__ . '/includes/key.php';
+require_once __DIR__ . '/includes/log.php';
 require_once __DIR__ . '/includes/admin.php';
 require_once __DIR__ . '/includes/rest.php';
 
@@ -26,10 +28,15 @@ register_activation_hook(__FILE__, function () {
 		update_option('babylovegrowth_api_key', $old);
 		delete_option('blg_api_key');
 	}
-	// Ensure key exists
-	$key = get_option('babylovegrowth_api_key', '');
-	if (!$key) {
-		update_option('babylovegrowth_api_key', wp_generate_password(32, false, false));
+
+	// Only issue a key on a genuinely fresh install. An existing site keeps the
+	// key it already handed to the dashboard, whether that is a readable
+	// pre-1.0.21 key or a fingerprint from a later one.
+	$has_key = get_option('babylovegrowth_api_key', '') !== ''
+		|| get_option('babylovegrowth_key_hash', '') !== '';
+
+	if (!$has_key) {
+		babylovegrowth_store_new_api_key(babylovegrowth_generate_api_key());
 	}
 });
 

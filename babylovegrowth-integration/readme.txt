@@ -4,7 +4,7 @@ Tags: rest api, headless, publishing, webhook
 Requires at least: 5.6
 Tested up to: 7.0
 Requires PHP: 7.4
-Stable tag: 1.0.21
+Stable tag: 1.0.22
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -28,8 +28,14 @@ BabyLoveGrowth Integration adds a secure REST API endpoint to your WordPress sit
 
 == Frequently Asked Questions ==
 
-= How do I regenerate the API key? =
-On the Settings → BabyLoveGrowth Integration page, click "Generate New API Key".
+= How do I regenerate the Integration Key? =
+On the Babylovegrowth settings page, click "Generate New Key". The previous key stops working immediately, so paste the new one into your BabyLoveGrowth dashboard to resume publishing. Do this whenever the key may have been exposed — after a security incident, a database leak, or when someone with access leaves.
+
+= Why can't I see my Integration Key any more? =
+The key is stored as a one-way fingerprint rather than in readable form, so a stolen copy of your database does not reveal a working key. It is shown once when generated, then hidden after your first article arrives (or after seven days if the plugin is never connected). If you no longer have it, generate a new one.
+
+= How do I check whether a post came from BabyLoveGrowth? =
+The settings page has a Recent Activity list showing every request this plugin received — accepted or rejected — with the time, the result and the article. No visitor IP addresses are recorded.
 
 = What is the endpoint URL? =
 `/wp-json/babylovegrowth/v1/publish` on your site. Test connectivity with `/wp-json/babylovegrowth/v1/ping`.
@@ -43,6 +49,13 @@ Requests are authorized with the API key only. No user login is required.
 3. Backlinks.
 
 == Changelog ==
+
+= 1.0.22 =
+* Added: "Generate New Key" — you can now replace your Integration Key at any time. The old key is revoked immediately. Previously a key could only be changed by deleting and reinstalling the plugin.
+* Added: Integration Keys are now stored as a one-way fingerprint instead of readable text, so a copy of your database no longer reveals a working key. Existing keys keep working and move to the new storage the first time you generate a new key.
+* Added: Recent Activity log on the settings page, listing every request the publish endpoint received — accepted or rejected — with time, result and article. No IP addresses are recorded.
+* Security: Fixed an issue where structured data (JSON-LD) supplied with an article was written to the page without validation. A caller holding a valid Integration Key could have used it to place scripts on published articles. Stored data is now re-encoded and anything that is not valid structured data is discarded.
+* Security: The publish endpoint now authorises the request before it reaches any post-writing code, and repeated failed key attempts from one address are rate limited.
 
 = 1.0.21 =
 * Fixed: Posts could be published without their featured image on slower sites. The featured image is now imported before the rest of the article's images, publishing keeps running if the connection drops, and a background check sets the image if the request is cut short.

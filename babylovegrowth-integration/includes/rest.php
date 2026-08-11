@@ -11,10 +11,52 @@ add_action('rest_api_init', function () {
 	register_rest_route('babylovegrowth/v1', '/publish', [
 		'methods'  => 'POST',
 		'callback' => 'babylovegrowth_handle_publish',
-		'permission_callback' => '__return_true',
+		'permission_callback' => 'babylovegrowth_verify_api_key_permission',
 	]);
 });
 
+/**
+ * Authorize the publish endpoint against the site's Integration Key.
+ *
+ * This runs before the handler, so an unauthorized request never reaches any
+ * post-writing code.
+ */
+function babylovegrowth_verify_api_key_permission(WP_REST_Request $request) {
+	$incoming = babylovegrowth_get_api_key($request);
+
+	// The key is checked before the rate limiter, so a correct key always gets
+	// through. The limiter is there to slow down wrong keys; it must never lock
+	// out a site that has just pasted the right one after rotating, which is
+	// precisely the moment publishing needs to resume.
+	if ($incoming !== '' && babylovegrowth_verify_api_key($incoming)) {
+		babylovegrowth_clear_auth_failures();
+		return true;
+	}
+
+	// Blocked callers are turned away without touching the database — otherwise a
+	// flood of bad requests would cost a write each, which is what the limiter
+	// exists to prevent.
+	if (babylovegrowth_auth_is_throttled()) {
+		return new WP_Error(
+			'rest_forbidden',
+			__('Too many failed attempts. Try again later.', 'babylovegrowth-integration'),
+			['status' => 429]
+		);
+	}
+
+	$missing = ($incoming === '');
+
+	babylovegrowth_log_event($missing ? 'missing_key' : 'invalid_key');
+	babylovegrowth_record_auth_failure();
+
+	return new WP_Error(
+		'rest_forbidden',
+		$missing
+			? __('Missing API key.', 'babylovegrowth-integration')
+			: __('Invalid API key.', 'babylovegrowth-integration'),
+		['status' => $missing ? 401 : 403]
+	);
+}
 
 function babylovegrowth_get_api_key(WP_REST_Request $request) {
 	$api_key = $request->get_header('X-API-Key');
@@ -31,18 +73,11 @@ function babylovegrowth_get_api_key(WP_REST_Request $request) {
 }
 
 function babylovegrowth_handle_publish(WP_REST_Request $request) {
+	// API key is already validated in permission_callback.
+
 	// Image downloads can outlive the caller's HTTP timeout - finish the post anyway.
 	ignore_user_abort(true);
 	@set_time_limit(300);
-
-	$incoming = babylovegrowth_get_api_key($request);
-	if (empty($incoming)) {
-		return new WP_REST_Response(['success' => false, 'error' => 'missing_api_key'], 401);
-	}
-	$stored = get_option('babylovegrowth_api_key', '');
-	if (!$stored || !hash_equals($stored, $incoming)) {
-		return new WP_REST_Response(['success' => false, 'error' => 'invalid_token'], 403);
-	}
 
 	$body = (array) $request->get_json_params();
 	$title = sanitize_text_field($body['title'] ?? '');
@@ -62,6 +97,7 @@ function babylovegrowth_handle_publish(WP_REST_Request $request) {
 	$lang = sanitize_text_field($body['lang'] ?? '');
 
 	if (!$title || !$slug || (!$content_html && !$content_md)) {
+		babylovegrowth_log_event('invalid_payload', ['slug' => $slug]);
 		return new WP_REST_Response(['success' => false, 'error' => 'invalid_payload'], 400);
 	}
 
@@ -113,16 +149,20 @@ function babylovegrowth_handle_publish(WP_REST_Request $request) {
 	};
 add_filter('wp_kses_allowed_html', $allow_html, 10, 2);
 
+	$was_existing = (bool) $post_id;
+
 	if ($post_id) {
 		$post_data['ID'] = $post_id;
 		$result = wp_update_post($post_data, true);
 		if (is_wp_error($result)) {
+			babylovegrowth_log_event('error', ['post_id' => $post_id, 'slug' => $slug]);
 			return new WP_REST_Response(['success' => false, 'error' => $result->get_error_message()], 500);
 		}
 		$post_id = (int) $result;
 	} else {
 		$result = wp_insert_post($post_data, true);
 		if (is_wp_error($result)) {
+			babylovegrowth_log_event('error', ['slug' => $slug]);
 			return new WP_REST_Response(['success' => false, 'error' => $result->get_error_message()], 500);
 		}
 		$post_id = (int) $result;
@@ -215,6 +255,15 @@ add_filter('wp_kses_allowed_html', $allow_html, 10, 2);
 
 	// Update SEO Meta for 3rd party plugins (Yoast, SEOPress, Rank Math, AIOSEO)
 	babylovegrowth_update_seo_meta($post_id, $title, $meta, $keywords);
+
+	// A successful publish proves the dashboard holds the key, so this site no
+	// longer needs to keep a readable copy of it on the settings screen.
+	babylovegrowth_confirm_key_delivered();
+
+	babylovegrowth_log_event($was_existing ? 'updated' : 'published', [
+		'post_id' => $post_id,
+		'slug'    => $slug,
+	]);
 
 	$link = get_permalink($post_id);
 	return new WP_REST_Response([
@@ -327,17 +376,63 @@ function babylovegrowth_set_post_language($post_id, $lang, $content = '') {
 	return false;
 }
 
+/**
+ * Pull the JSON-LD blocks out of the content.
+ *
+ * Only the JSON payload is kept, never the surrounding <script> tag, so no markup
+ * from an incoming article can survive to be printed back out later.
+ */
 function babylovegrowth_extract_jsonld_scripts(&$content) {
-	$scripts = [];
-	
+	$blocks = [];
+
 	// Match all script tags with type="application/ld+json"
 	if (preg_match_all('/<script[^>]*type=["\']application\/ld\+json["\'][^>]*>(.*?)<\/script>/is', $content, $matches)) {
-		$scripts = $matches[0]; // Store full script tags
+		foreach ($matches[1] as $json) {
+			$json = trim($json);
+			if ($json !== '') {
+				$blocks[] = $json;
+			}
+		}
 		// Remove scripts from content
 		$content = preg_replace('/<script[^>]*type=["\']application\/ld\+json["\'][^>]*>.*?<\/script>/is', '', $content);
 	}
-	
-	return $scripts;
+
+	return $blocks;
+}
+
+/**
+ * Turn one stored JSON-LD block into markup that is safe to print.
+ *
+ * The block is only ever emitted after a successful json_decode, and it is
+ * re-encoded from the decoded value rather than echoed back verbatim. Anything
+ * that is not valid structured data returns '' and is dropped — including markup
+ * saved by an earlier version of this plugin, which stored whole <script> tags.
+ */
+function babylovegrowth_render_jsonld($block) {
+	if (!is_string($block)) {
+		return '';
+	}
+
+	// Blocks saved before 1.0.22 are full <script> tags; keep only the JSON inside.
+	// Anchored and greedy on purpose: a "<script" sitting inside a JSON string value
+	// must not be mistaken for the wrapper and truncate otherwise-valid data.
+	if (preg_match('/^\s*<script[^>]*>(.*)<\/script>\s*$/is', $block, $m)) {
+		$block = $m[1];
+	}
+
+	$data = json_decode(trim($block), true);
+	if (json_last_error() !== JSON_ERROR_NONE || !is_array($data)) {
+		return '';
+	}
+
+	// JSON_HEX_TAG escapes < and > as < / >, so the payload can never close
+	// the script tag it sits in. Search engines read the escapes as normal JSON.
+	$json = wp_json_encode($data, JSON_UNESCAPED_UNICODE | JSON_HEX_TAG);
+	if ($json === false) {
+		return '';
+	}
+
+	return '<script type="application/ld+json">' . $json . '</script>';
 }
 
 function babylovegrowth_normalize_html_for_wp($html) {
@@ -391,6 +486,7 @@ function babylovegrowth_ensure_featured_image($post_id, $url, $alt = '') {
 	}
 
 	if (!babylovegrowth_set_featured_image($post_id, $url, $alt)) {
+		// phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log -- Production logging for a background retry that cannot surface an error to the caller.
 		error_log('BabyLoveGrowth: featured image retry failed for post ' . $post_id . ' (' . $url . ')');
 	}
 }
@@ -529,14 +625,25 @@ add_action('wp_head', function() {
 	
 	$post_id = get_the_ID();
 	$jsonld_scripts = get_post_meta($post_id, '_babylovegrowth_jsonld', true);
-	
-	if (!empty($jsonld_scripts) && is_array($jsonld_scripts)) {
-		echo "\n<!-- BabyLoveGrowth JSON-LD -->\n";
-		foreach ($jsonld_scripts as $script) {
-			echo $script . "\n";
-		}
-		echo "<!-- /BabyLoveGrowth JSON-LD -->\n";
+
+	if (empty($jsonld_scripts) || !is_array($jsonld_scripts)) {
+		return;
 	}
+
+	$markup = '';
+	foreach ($jsonld_scripts as $script) {
+		$rendered = babylovegrowth_render_jsonld($script);
+		if ($rendered !== '') {
+			$markup .= $rendered . "\n";
+		}
+	}
+
+	if ($markup === '') {
+		return;
+	}
+
+	// phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- babylovegrowth_render_jsonld() only ever returns machine-encoded JSON wrapped in a script tag we build ourselves.
+	echo "\n<!-- BabyLoveGrowth JSON-LD -->\n" . $markup . "<!-- /BabyLoveGrowth JSON-LD -->\n";
 }, 10);
 
 
