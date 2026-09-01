@@ -45,7 +45,11 @@ function babylovegrowth_generate_api_key() {
  * Masked form of a key, e.g. blg_••••••a91f.
  */
 function babylovegrowth_build_key_preview($key) {
-	return substr($key, 0, 4) . str_repeat('•', 6) . substr($key, -4);
+	// Keep the whole prefix, including its underscore, however long it is.
+	$underscore = strpos($key, '_');
+	$prefix = $underscore === false ? substr($key, 0, 4) : substr($key, 0, $underscore + 1);
+
+	return $prefix . str_repeat('•', 6) . substr($key, -4);
 }
 
 /**

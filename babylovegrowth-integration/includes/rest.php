@@ -119,6 +119,15 @@ function babylovegrowth_handle_publish(WP_REST_Request $request) {
 	if (!$author_id || !get_userdata($author_id)) {
 		$author_id = get_current_user_id() ?: 1;
 	}
+
+	// Publish as the chosen author so WordPress applies that user's permissions.
+	// The request has no WordPress login of its own, so without this it saves as
+	// nobody and WordPress strips out forms, scripts and most styling.
+	$full_html = babylovegrowth_full_html_status($author_id);
+	if ($full_html === 'on') {
+		wp_set_current_user($author_id);
+	}
+
 	$post_data = [
 		'post_title'   => $title,
 		'post_name'    => $slug,
@@ -185,6 +194,8 @@ add_filter('wp_kses_allowed_html', $allow_html, 10, 2);
 	$content_with_local_images = babylovegrowth_sideload_content_images($content, $post_id);
 	if ($content_with_local_images !== $content) {
 		$content = $content_with_local_images;
+		// Second write of the content, so WordPress filters it again. The
+		// wp_set_current_user() call above must still apply or this strips it.
 		wp_update_post(['ID' => $post_id, 'post_content' => $content]);
 	}
 
@@ -270,12 +281,32 @@ add_filter('wp_kses_allowed_html', $allow_html, 10, 2);
 		'success' => true,
 		'post_id' => $post_id,
 		'link' => $link ?: null,
+		// So the dashboard can warn when a form or script was stripped.
+		'full_html' => $full_html,
 	], 200);
 }
 
 function babylovegrowth_find_post_id_by_slug($slug) {
 	$post = get_page_by_path($slug, OBJECT, 'post');
 	return $post ? (int) $post->ID : 0;
+}
+
+/**
+ * Can this publish keep the article's HTML exactly as sent?
+ *
+ * 'off'         — the setting is turned off.
+ * 'unavailable' — turned on, but the chosen author cannot publish custom code.
+ * 'on'          — the HTML is stored as sent.
+ *
+ * 'unavailable' is worth reporting: the setting looks on, yet articles still
+ * arrive stripped. user_can() also covers multisite and DISALLOW_UNFILTERED_HTML.
+ */
+function babylovegrowth_full_html_status($author_id) {
+	if (!get_option('babylovegrowth_allow_full_html', false)) {
+		return 'off';
+	}
+
+	return user_can((int) $author_id, 'unfiltered_html') ? 'on' : 'unavailable';
 }
 
 function babylovegrowth_update_seo_meta($post_id, $title, $description, $keywords = '') {

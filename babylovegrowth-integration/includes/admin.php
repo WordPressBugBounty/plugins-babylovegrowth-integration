@@ -52,6 +52,14 @@ add_action('admin_init', function () {
 		'default' => true,
 		'sanitize_callback' => function ($val) { return (bool) $val; }
 	]);
+	// Only someone allowed to publish custom code can grant it to the plugin.
+	register_setting('babylovegrowth_integration', 'babylovegrowth_allow_full_html', [
+		'type' => 'boolean',
+		'default' => false,
+		'sanitize_callback' => function ($val) {
+			return $val && current_user_can('unfiltered_html');
+		}
+	]);
 	register_setting('babylovegrowth_integration', 'babylovegrowth_post_status', [
 		'type' => 'string',
 		'default' => 'publish',
@@ -123,6 +131,13 @@ function babylovegrowth_integration_settings_page() {
 	$selected_author = get_option('babylovegrowth_author', '');
 	$selected_tags = get_option('babylovegrowth_tags', []);
 	$feature_image_enabled = get_option('babylovegrowth_feature_image_enabled', true);
+	$allow_full_html = get_option('babylovegrowth_allow_full_html', false);
+	// Grey out the checkbox if this user cannot publish custom code themselves.
+	$can_allow_full_html = current_user_can('unfiltered_html');
+	// The chosen author decides whether the setting actually does anything.
+	$full_html_author_ok = $selected_author
+		? user_can((int) $selected_author, 'unfiltered_html')
+		: $can_allow_full_html;
 	$post_status = get_option('babylovegrowth_post_status', 'publish');
 	$categories = get_categories(['hide_empty' => false]);
 	$authors = get_users(['role__in' => ['administrator', 'editor', 'author'], 'orderby' => 'display_name', 'order' => 'ASC']);
@@ -240,7 +255,7 @@ function babylovegrowth_integration_settings_page() {
 				printf(
 					/* translators: %s: link reading "BabyLoveGrowth dashboard". */
 					esc_html__('Copy the key below and paste it into your %s integration settings.', 'babylovegrowth-integration'),
-					'<a href="' . esc_url('https://www.babylovegrowth.ai/dashboard') . '" target="_blank" rel="noopener noreferrer">' . esc_html__('BabyLoveGrowth dashboard', 'babylovegrowth-integration') . '</a>'
+					'<a href="' . esc_url('https://www.babylovegrowth.ai/dashboard/settings/integrations') . '" target="_blank" rel="noopener noreferrer">' . esc_html__('BabyLoveGrowth dashboard', 'babylovegrowth-integration') . '</a>'
 				);
 				?>
 			</p>
@@ -349,6 +364,21 @@ function babylovegrowth_integration_settings_page() {
 						<?php echo esc_html__('Do not repeat the title and image inside the article', 'babylovegrowth-integration'); ?>
 					</label>
 					<p class="blg-desc"><?php echo esc_html__('Your article already shows its title and featured image at the top, so we remove the duplicate pair from the text.', 'babylovegrowth-integration'); ?></p>
+				</div>
+
+				<div class="blg-field">
+					<label>
+						<input type="checkbox" id="babylovegrowth_allow_full_html" name="babylovegrowth_allow_full_html" value="1" <?php checked($allow_full_html, true); ?> <?php disabled(!$can_allow_full_html); ?> />
+						<?php echo esc_html__('Allow forms, quizzes and custom styling', 'babylovegrowth-integration'); ?>
+					</label>
+					<p class="blg-desc"><?php echo esc_html__('Without this, WordPress strips forms, quizzes and booking widgets out of your articles.', 'babylovegrowth-integration'); ?></p>
+					<?php if (!$can_allow_full_html) : ?>
+						<p class="blg-warn"><?php echo esc_html__('Your site does not allow custom code, so this cannot be turned on. Your host or site administrator can tell you why.', 'babylovegrowth-integration'); ?></p>
+					<?php elseif ($allow_full_html && !$full_html_author_ok) : ?>
+						<p class="blg-warn"><?php echo esc_html__('The author chosen above is not allowed to publish custom code, so forms and quizzes will still be removed. Pick an administrator or editor instead.', 'babylovegrowth-integration'); ?></p>
+					<?php elseif ($allow_full_html) : ?>
+						<p class="blg-warn"><?php echo esc_html__('While this is on, anyone with your Integration Key can run code on your site. If it ever leaks, generate a new key straight away.', 'babylovegrowth-integration'); ?></p>
+					<?php endif; ?>
 				</div>
 
 				<div class="blg-actions">
