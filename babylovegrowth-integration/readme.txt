@@ -4,7 +4,7 @@ Tags: rest api, headless, publishing, webhook
 Requires at least: 5.6
 Tested up to: 7.0
 Requires PHP: 7.4
-Stable tag: 1.0.24
+Stable tag: 1.0.25
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -49,6 +49,9 @@ Requests are authorized with the API key only. No user login is required.
 3. Backlinks.
 
 == Changelog ==
+
+= 1.0.25 =
+* Improved: Internal improvements to how published articles are kept in sync.
 
 = 1.0.24 =
 * Added: "Allow forms, quizzes and custom styling" — an optional setting that keeps forms, quizzes and booking widgets working in your articles instead of letting WordPress strip them out. Off by default. Only an administrator or editor can turn it on, and the author you publish as must be one too. Sites on a WordPress network, or using DISALLOW_UNFILTERED_HTML, are unaffected.

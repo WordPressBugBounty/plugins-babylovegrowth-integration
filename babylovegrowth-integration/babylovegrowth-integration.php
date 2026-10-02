@@ -2,7 +2,7 @@
 /**
  * Plugin Name: BabyLoveGrowth Integration
  * Description: Secure REST endpoint to publish posts from BabyLoveGrowth.ai backend via API key.
- * Version: 1.0.24
+ * Version: 1.0.25
  * Author: BabyLoveGrowth.ai
  * License: GPLv2 or later
  * License URI: https://www.gnu.org/licenses/gpl-2.0.html
@@ -19,6 +19,7 @@ require_once __DIR__ . '/includes/key.php';
 require_once __DIR__ . '/includes/log.php';
 require_once __DIR__ . '/includes/admin.php';
 require_once __DIR__ . '/includes/rest.php';
+require_once __DIR__ . '/includes/post-content.php';
 
 register_activation_hook(__FILE__, function () {
 	// Migrate old option key if present
